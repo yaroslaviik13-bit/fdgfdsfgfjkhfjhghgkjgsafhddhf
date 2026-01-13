@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # Получаем токен из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = 8590016146  # Замени на свой ID если нужно
+ADMIN_ID = 6904586409  # Замени на свой ID если нужно
 
 if not BOT_TOKEN:
     print("❌ ОШИБКА: BOT_TOKEN не установлен!")
@@ -169,4 +169,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
