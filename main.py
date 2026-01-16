@@ -2,37 +2,38 @@ import json
 import time
 import os
 import sys
+import logging
 from pathlib import Path
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ВНИМАНИЕ: НЕЛЬЗЯ оставлять токен в открытом виде в коде!
-# Получаем токен из переменных окружения или используем временное значение
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8587220562:AAHMluRWmebwIsA8itlyVacNbH2WVs-pB50")  # Используем os.getenv
-ADMIN_ID = 6904586409  # Замени на свой ID если нужно
+# ==================== НАСТРОЙКИ ====================
+BOT_TOKEN = "8587220562:AAEY1HwkiWjRv7UKksLyCuNeTN9grQqRj2Y"
+ADMIN_ID = 6904586409  # ТВОЙ ID (получи через @userinfobot если не уверен)
+ANTISPAM_SECONDS = 3
+# ===================================================
 
-if not BOT_TOKEN or BOT_TOKEN == "":
-    print("❌ ОШИБКА: BOT_TOKEN не установлен!")
-    print("Добавьте в переменные окружения на bothost.ru:")
-    print("Ключ: BOT_TOKEN")
-    print("Значение: ваш_токен_бота")
-    sys.exit(1)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-LINKS_FILE = Path("data/message_links.json")
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
+LINKS_FILE = DATA_DIR / "message_links.json"
 
 message_links = {}
 last_message_time = {}
-ANTISPAM_SECONDS = 5
 
 
 def save_links():
     try:
         with open(LINKS_FILE, "w", encoding="utf-8") as f:
-            json.dump(message_links, f, ensure_ascii=False)
+            json.dump(message_links, f, ensure_ascii=False, indent=2)
+        logger.info(f"💾 Сохранено {len(message_links)} связей")
     except Exception as e:
-        print(f"❌ Ошибка сохранения: {e}")
+        logger.error(f"❌ Ошибка сохранения: {e}")
 
 
 def load_links():
@@ -41,146 +42,218 @@ def load_links():
         if LINKS_FILE.exists():
             with open(LINKS_FILE, "r", encoding="utf-8") as f:
                 message_links = json.load(f)
-                print(f"✅ Загружено {len(message_links)} связей")
+            logger.info(f"📂 Загружено {len(message_links)} связей")
+        else:
+            message_links = {}
+            logger.info("📂 Файл связей не найден, создан новый")
     except Exception as e:
-        print(f"❌ Ошибка загрузки: {e}")
+        logger.error(f"❌ Ошибка загрузки: {e}")
         message_links = {}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print(f"🟢 Команда /start от {update.effective_user.id}")
+    user = update.effective_user
+    logger.info(f"🟢 /start от {user.id}")
+
     await update.message.reply_text(
-        "👋 Привет! Напишите мне сообщение, и я передам его администратору!"
+        "🤖 *Бот обратной связи*\n\n"
+        "Напишите сообщение - оно придет администратору.\n"
+        "Админ ответит вам здесь же.\n\n"
+        "Отправляйте текст, фото или файлы.",
+        parse_mode="Markdown"
     )
 
 
-async def user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает ID пользователя"""
     user = update.effective_user
-    user_id = user.id
-    now = time.time()
+    logger.info(f"🆔 Запрос ID от {user.id}")
 
-    print(f"📨 Сообщение от пользователя {user_id}")
+    await update.message.reply_text(
+        f"*Ваш профиль:*\n"
+        f"🆔 ID: `{user.id}`\n"
+        f"👤 Username: @{user.username if user.username else 'нет'}\n"
+        f"📝 Имя: {user.first_name if user.first_name else 'не указано'}\n\n"
+        f"*Текущий админ ID:* `{ADMIN_ID}`",
+        parse_mode="Markdown"
+    )
 
-    # AntiSpam
-    last = last_message_time.get(user_id, 0)
-    if now - last < ANTISPAM_SECONDS:
-        print(f"⚠️ Антиспам для {user_id}")
-        await update.message.reply_text("⏳ Подождите немного перед следующим сообщением.")
+
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ЛЮБЫХ сообщений от пользователей (включая админа как пользователя)"""
+    user = update.effective_user
+    chat = update.effective_chat
+
+    logger.info(f"📨 Сообщение от {user.id} (@{user.username})")
+
+    # Если это не личный чат - игнорируем
+    if chat.type != "private":
         return
-    last_message_time[user_id] = now
 
-    username = user.username or "без username"
+    # Антиспам для обычных пользователей (но не для админа)
+    if user.id != ADMIN_ID:
+        now = time.time()
+        if user.id in last_message_time:
+            time_diff = now - last_message_time[user.id]
+            if time_diff < ANTISPAM_SECONDS:
+                await update.message.reply_text(f"⏳ Подождите {ANTISPAM_SECONDS} секунд")
+                return
+        last_message_time[user.id] = now
+
+    # Формируем информацию о пользователе
+    user_info = f"@{user.username}" if user.username else f"ID: {user.id}"
+    if user.first_name:
+        user_info = f"{user.first_name} ({user_info})"
+
+    # Если это админ - добавляем пометку
+    if user.id == ADMIN_ID:
+        user_info = f"👑 АДМИН {user_info}"
 
     try:
         if update.message.text:
-            print(f"📝 Текст от {user_id}: {update.message.text[:50]}...")
-            sent = await context.bot.send_message(
+            # Отправляем текст админу (самому себе если ты админ)
+            logger.info(f"📝 Текст от {user.id}: {update.message.text[:50]}...")
+
+            sent_msg = await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"📩 Сообщение от @{username} (ID: {user_id}):\n\n{update.message.text}"
+                text=f"📩 *Сообщение от {user_info}*\n\n{update.message.text}",
+                parse_mode="Markdown"
             )
-            message_links[str(sent.message_id)] = user_id
+
+            # Сохраняем связь: ID сообщения → ID отправителя
+            message_links[str(sent_msg.message_id)] = user.id
             save_links()
-            await update.message.reply_text("✅ Сообщение отправлено администратору!")
+
+            # Отвечаем отправителю
+            if user.id == ADMIN_ID:
+                await update.message.reply_text("✅ Сообщение сохранено (ты админ)")
+            else:
+                await update.message.reply_text("✅ Сообщение отправлено администратору!")
+
         else:
-            print(f"📎 Медиа от {user_id}")
-            forwarded = await update.message.forward(chat_id=ADMIN_ID)
-            info = await context.bot.send_message(
+            # Медиа (фото, файлы и т.д.)
+            logger.info(f"📎 Медиа от {user.id}")
+
+            # Пересылаем админу
+            forwarded_msg = await update.message.forward(chat_id=ADMIN_ID)
+
+            # Информационное сообщение админу
+            info_msg = await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"📩 Сообщение от @{username} (ID: {user_id})",
-                reply_to_message_id=forwarded.message_id
+                text=f"📎 *Медиа от {user_info}*",
+                reply_to_message_id=forwarded_msg.message_id,
+                parse_mode="Markdown"
             )
-            message_links[str(info.message_id)] = user_id
+
+            # Сохраняем связи
+            message_links[str(forwarded_msg.message_id)] = user.id
+            message_links[str(info_msg.message_id)] = user.id
             save_links()
-            await update.message.reply_text("✅ Ваше сообщение отправлено!")
+
+            await update.message.reply_text("✅ Медиа отправлено администратору!")
+
     except Exception as e:
-        print(f"❌ Ошибка отправки: {e}")
-        await update.message.reply_text("❌ Ошибка отправки сообщения. Попробуйте позже.")
+        logger.error(f"❌ Ошибка: {e}")
+        await update.message.reply_text("❌ Ошибка отправки. Попробуйте позже.")
 
 
-async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        print(f"⚠️ Попытка ответа не от админа: {update.effective_user.id}")
+async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ОТВЕТОВ админа (когда он отвечает на сообщение через Reply)"""
+    user = update.effective_user
+
+    # Только админ может отвечать
+    if user.id != ADMIN_ID:
         return
 
+    # Должен быть ответ на какое-то сообщение
     if not update.message.reply_to_message:
         return
 
-    admin_msg_id = str(update.message.reply_to_message.message_id)
-    print(f"🔄 Ответ админа на сообщение {admin_msg_id}")
+    replied_msg_id = str(update.message.reply_to_message.message_id)
+    logger.info(f"🔄 Ответ админа на сообщение {replied_msg_id}")
 
-    if admin_msg_id not in message_links:
-        await update.message.reply_text("❌ Не удалось найти пользователя.")
+    # Ищем отправителя оригинального сообщения
+    if replied_msg_id not in message_links:
+        await update.message.reply_text("❌ Ошибка: Не могу найти отправителя.")
         return
 
-    user_id = message_links[admin_msg_id]
+    target_user_id = message_links[replied_msg_id]
+    logger.info(f"📤 Отправка ответа пользователю {target_user_id}")
 
     try:
-        print(f"📤 Отправка ответа пользователю {user_id}")
-        # Если это просто текст
         if update.message.text:
             await context.bot.send_message(
-                chat_id=user_id,
-                text=f"📨 Ответ от администратора:\n\n{update.message.text}"
+                chat_id=target_user_id,
+                text=f"👨‍💼 *Ответ администратора:*\n\n{update.message.text}",
+                parse_mode="Markdown"
             )
         else:
-            # Если это медиа (фото, видео и т.д.)
+            # Если админ отправил медиа в ответ
             await context.bot.copy_message(
-                chat_id=user_id,
-                from_chat_id=ADMIN_ID,
+                chat_id=target_user_id,
+                from_chat_id=update.effective_chat.id,
                 message_id=update.message.message_id
             )
-        await update.message.reply_text("✅ Ответ отправлен пользователю!")
+
+        await update.message.reply_text("✅ Ответ отправлен!")
+
     except Exception as e:
-        print(f"❌ Ошибка отправки ответа: {e}")
-        await update.message.reply_text(f"❌ Ошибка: {e}")
-
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print(f"🔥 Ошибка: {context.error}")
-    if update and update.effective_message:
-        try:
-            await update.effective_message.reply_text("⚠️ Произошла ошибка. Попробуйте позже.")
-        except:
-            pass
+        logger.error(f"❌ Ошибка отправки ответа: {e}")
+        await update.message.reply_text(f"❌ Не удалось отправить: {e}")
 
 
 def main():
-    print("🤖 Запуск бота обратной связи...")
-    print(f"📞 Админ ID: {ADMIN_ID}")
-    print(f"🔑 Токен: {BOT_TOKEN[:10]}...")
+    print("=" * 50)
+    print("🤖 ТЕСТОВЫЙ БОТ ОБРАТНОЙ СВЯЗИ")
+    print("=" * 50)
 
+    print(f"🔑 Токен: {BOT_TOKEN[:10]}...")
+    print(f"👑 Admin ID: {ADMIN_ID}")
+    print("=" * 50)
+
+    # Загружаем сохраненные данные
     load_links()
 
-    # Создаем приложение
-    application = Application.builder().token(BOT_TOKEN).build()
+    try:
+        app = Application.builder().token(BOT_TOKEN).build()
 
-    # Добавляем обработчики в правильном порядке (важно!)
-    application.add_handler(CommandHandler("start", start))
-    
-    # Обработчик для сообщений от админа (ответы) - ДОЛЖЕН БЫТЬ ПЕРВЫМ
-    application.add_handler(MessageHandler(
-        filters.REPLY & filters.User(ADMIN_ID),
-        admin_reply
-    ))
-    
-    # Обработчик для текстовых сообщений от пользователей
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & ~filters.User(ADMIN_ID),
-        user_message
-    ))
-    
-    # Обработчик для медиа-сообщений от пользователей
-    application.add_handler(MessageHandler(
-        (~filters.TEXT) & ~filters.COMMAND & ~filters.User(ADMIN_ID),
-        user_message
-    ))
+        # Команды
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("id", id_command))
 
-    application.add_error_handler(error_handler)
+        # ВАЖНО: Сначала обработчик ответов админа
+        app.add_handler(MessageHandler(
+            filters.REPLY & filters.User(ADMIN_ID),
+            handle_admin_reply
+        ))
 
-    print("✅ Бот запущен и готов к работе!")
+        # Затем обработчик ВСЕХ остальных сообщений
+        app.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_user_message
+        ))
 
-    # Запускаем polling
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # И обработчик медиа
+        app.add_handler(MessageHandler(
+            (~filters.TEXT) & filters.ChatType.PRIVATE,
+            handle_user_message
+        ))
+
+        print("🟢 Бот запущен!")
+        print("\n📱 ИНСТРУКЦИЯ ДЛЯ ТЕСТА:")
+        print("1. Напиши боту любое сообщение (например 'тест')")
+        print("2. Сообщение придет тебе же как админу")
+        print("3. Ответь на него (Reply) - ответ вернется тебе же")
+        print("\n🔧 Проверь свой ID командой /id")
+        print("=" * 50)
+
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES
+        )
+
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
 
 
 if __name__ == "__main__":
