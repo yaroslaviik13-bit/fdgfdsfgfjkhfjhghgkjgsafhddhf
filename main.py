@@ -6,15 +6,16 @@ from pathlib import Path
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Получаем токен из переменных окружения
-BOT_TOKEN = 8587220562:AAHMluRWmebwIsA8itlyVacNbH2WVs-pB50
+# ВНИМАНИЕ: НЕЛЬЗЯ оставлять токен в открытом виде в коде!
+# Получаем токен из переменных окружения или используем временное значение
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8587220562:AAHMluRWmebwIsA8itlyVacNbH2WVs-pB50")  # Используем os.getenv
 ADMIN_ID = 6904586409  # Замени на свой ID если нужно
 
-if not BOT_TOKEN:
+if not BOT_TOKEN or BOT_TOKEN == "":
     print("❌ ОШИБКА: BOT_TOKEN не установлен!")
     print("Добавьте в переменные окружения на bothost.ru:")
     print("Ключ: BOT_TOKEN")
-    print("Значение: 8587220562:AAFKav1GMAcy8K195JUIcTHPDeLHxReU-rg")
+    print("Значение: ваш_токен_бота")
     sys.exit(1)
 
 LINKS_FILE = Path("data/message_links.json")
@@ -115,11 +116,19 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         print(f"📤 Отправка ответа пользователю {user_id}")
-        await context.bot.copy_message(
-            chat_id=user_id,
-            from_chat_id=ADMIN_ID,
-            message_id=update.message.message_id
-        )
+        # Если это просто текст
+        if update.message.text:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"📨 Ответ от администратора:\n\n{update.message.text}"
+            )
+        else:
+            # Если это медиа (фото, видео и т.д.)
+            await context.bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=ADMIN_ID,
+                message_id=update.message.message_id
+            )
         await update.message.reply_text("✅ Ответ отправлен пользователю!")
     except Exception as e:
         print(f"❌ Ошибка отправки ответа: {e}")
@@ -145,19 +154,25 @@ def main():
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Добавляем обработчики
+    # Добавляем обработчики в правильном порядке (важно!)
     application.add_handler(CommandHandler("start", start))
+    
+    # Обработчик для сообщений от админа (ответы) - ДОЛЖЕН БЫТЬ ПЕРВЫМ
+    application.add_handler(MessageHandler(
+        filters.REPLY & filters.User(ADMIN_ID),
+        admin_reply
+    ))
+    
+    # Обработчик для текстовых сообщений от пользователей
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & ~filters.User(ADMIN_ID),
         user_message
     ))
+    
+    # Обработчик для медиа-сообщений от пользователей
     application.add_handler(MessageHandler(
-        ~filters.TEXT & ~filters.COMMAND & ~filters.User(ADMIN_ID),
+        (~filters.TEXT) & ~filters.COMMAND & ~filters.User(ADMIN_ID),
         user_message
-    ))
-    application.add_handler(MessageHandler(
-        filters.ALL & filters.User(ADMIN_ID),
-        admin_reply
     ))
 
     application.add_error_handler(error_handler)
@@ -169,6 +184,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
-
